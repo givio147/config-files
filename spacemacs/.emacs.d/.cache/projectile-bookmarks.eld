@@ -1,1 +1,0 @@
-("d:/config-files/" "~/.emacs.d/" "d:/Source/Repos/Service.Portal/" "d:/Source/Repos/Service.MediaServices.MediaApi/" "d:/Source/Repos/Service.PortalEntityPublisher/" "d:/Source/Repos/PowerShell.Stratocast/")
