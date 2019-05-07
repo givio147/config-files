@@ -1,0 +1,521 @@
+// ==========================================================================
+// Copyright (C) 2018 by Genetec, Inc.
+// All rights reserved.
+// May be used only in accordance with a valid Source Code License Agreement.
+// ==========================================================================
+
+#pragma warning disable 612, 618 // disable compilation failure when using obsolete properties
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.Composition;
+using System.Globalization;
+using System.Linq;
+using System.Threading.Tasks;
+using Genetec.Cloud.Messages.Common;
+using Genetec.Cloud.Messages.Current.Notification;
+using Genetec.SaaS.ObjectConverter;
+using Genetec.SaaS.Portal.Business.Common;
+using Genetec.SaaS.Portal.Business.Common.Communication;
+using Genetec.SaaS.Portal.Business.SecurityCenter.Client.Communication;
+using Genetec.SaaS.Portal.Business.SecurityCenter.Client.Helpers.Suscriptions;
+using Genetec.SaaS.Portal.Common.Commands;
+using Genetec.SaaS.Portal.Common.Commands.Subscriptions;
+using Genetec.SaaS.Portal.Common.Logging;
+using Genetec.SaaS.Portal.Common.Models.Catalogs;
+using Genetec.SaaS.Portal.Common.Models.Entities;
+using Genetec.SaaS.Portal.Common.Models.Subscriptions;
+using Genetec.SaaS.Portal.DataAccess.Database.Entities.Subscriptions;
+using Genetec.SaaS.Portal.DataAccess.Database.Filters.Subscriptions;
+using Genetec.SaaS.Portal.DataAccess.Database.Repositories.Subscriptions;
+using Genetec.SaaS.Portal.DataAccess.Database.Repositories.System;
+using Genetec.SaaS.Portal.DataAccess.WebServices.Entities.Subscriptions;
+using Genetec.SaaS.Portal.DataAccess.WebServices.Repositories.Subscriptions;
+using CameraManufacturer = Genetec.Cloud.Messages.Common.CameraManufacturer;
+using CameraPreset = Genetec.SaaS.Portal.DataAccess.WebServices.Entities.Subscriptions.CameraPreset;
+using ImageMode = Genetec.SaaS.Portal.Common.Models.Catalogs.ImageMode;
+using ImageRotation = Genetec.SaaS.Portal.Common.Models.Subscriptions.ImageRotation;
+using RecordingPriority = Genetec.SaaS.Portal.Common.Models.Subscriptions.RecordingPriority;
+using RecordingType = Genetec.SaaS.Portal.Common.Models.Subscriptions.RecordingType;
+using Resolution = Genetec.SaaS.Portal.DataAccess.Database.Entities.Subscriptions.Resolution;
+
+namespace Genetec.SaaS.Portal.Business.SecurityCenter.Client.MessageHandlers.Subscriptions
+{
+    [MessageHandler(typeof(CameraAddedNotification))]
+    public class CameraAddedNotificationHandler : MessageHandler<CameraAddedNotification>
+    {
+        #region Properties
+
+        [Import]
+        public ICameraModelRepository CameraModels { get; set; }
+
+        [Import]
+        public ICameraPresetConfigurationRepository CameraPresetConfigurations { get; set; }
+
+        [Import]
+        public ICameraRepository Cameras { get; set; }
+
+        [Import]
+        public IIntegratorCameraPresetRepository IntegratorCameraPresetRepository { get; set; }
+
+        [Import]
+        public IObjectConverter ObjectConverter { get; set; }
+
+        [Import]
+        public IUserIdContainer UserIdContainer { get; set; }
+
+        [Import]
+        public ISecurityCenterRepository SecurityCenter { get; set; }
+
+        [Import(BusinessConstants.ServerQueueManager)]
+        public ICommunicationManager<Command> ServerQueueManager { get; set; }
+
+        #endregion
+
+        #region Methods
+
+        public override async Task DoWorkAsync(CameraAddedNotification cameraAddedNotification)
+        {
+            Manufacturer manufacturer = ConvertManufacturer(cameraAddedNotification.CameraManufacturer);
+
+            GetCameraByEndUserAccountIdAndSerialNumber getCamera = await Cameras.GetByEndUserAccountIdAndSerialNumber(cameraAddedNotification.CustomerId, cameraAddedNotification.CameraSerialNumber);
+            if (getCamera == null)
+            {
+                Logger.TraceError("Camera added notification was received for camera {0} that is already deleted. We should manually make sure that Portal and Security Center are in sync", cameraAddedNotification.CameraSerialNumber);
+                return;
+            }
+
+            Camera camera = ObjectConverter.From(getCamera).To<Camera>();
+
+            ((LoggerContextBase)Logger.LoggerContext).AccountId = camera.CameraId.ToString(CultureInfo.InvariantCulture);
+
+            //We have to manage two separate scenarios, because we may got OperationFailed during camera enrolment and as a result camera could be in Error state at this point
+            //1- Camera state is WaitingForConnection > Do the normal workflow
+            //2- Camera state is Error, Deleted, Deleting, DeletingVideoFile
+
+            //Handling scenario 1
+            if (!IsCameraInExpectedState(camera.State))
+            {
+                Logger.TraceError("Camera added notification was received for camera {0} that is already deleted. We should manually make sure that Portal and Security Center are in sync", cameraAddedNotification.CameraSerialNumber);
+                return;
+            }
+
+            UpdateCamera updateCamera = ObjectConverter.From(camera).To<UpdateCamera>();
+            GetCameraModel getCameraModel = await CameraModels.GetByManufacturerAndModelName(manufacturer, cameraAddedNotification.CameraModel);
+
+            updateCamera.CameraModelId = getCameraModel.CameraModelId;
+            updateCamera.SupportedImageRotations = ConvertSupportedRotations(cameraAddedNotification.SupportedRotations);
+            updateCamera.Firmware = cameraAddedNotification.CameraFirmwareVersion;
+            updateCamera.OnBoardStorage = cameraAddedNotification.EdgeRecording.SdCard.Supported;
+            updateCamera.StorageState = StorageStateResolver.ResolveCameraStorageState(cameraAddedNotification.EdgeRecording.SdCard.Status);
+            updateCamera.SupportNetworkAttachedStorage = cameraAddedNotification.EdgeRecording.Nas.Supported;
+            updateCamera.NetworkAttachedStorageState = StorageStateResolver.ResolveCameraStorageState(cameraAddedNotification.EdgeRecording.Nas.Status);
+            updateCamera.ImageRotation = ImageRotation.Rotation0;
+            updateCamera.RecordingPriority = RecordingPriority.FrameRate;
+            updateCamera.SecurityCenterCameraId = cameraAddedNotification.CameraId;
+
+            UpdateSupportedRecordingsRetentionDays(updateCamera, cameraAddedNotification);
+            UpdateSupportedResolutions(updateCamera, cameraAddedNotification);
+            updateCamera.State = CameraState.Connected;
+            updateCamera.MicrophoneId = cameraAddedNotification.Microphone == Guid.Empty ? (Guid?)null : cameraAddedNotification.Microphone;
+
+            if (camera.ReplacedCameraId.HasValue)
+            {
+                string issue = await CheckForReplacementCompatibilityIssue(cameraAddedNotification, updateCamera, camera);
+                if (!string.IsNullOrEmpty(issue))
+                {
+                    await Cameras.UpdateState(camera.EndUserAccountId, camera.CameraId, CameraState.ReplacingError, null, null, issue, null, null, StateMessageType.Error);
+                    return;
+                }
+            }
+            else
+            {
+                // We skip camera preset template for replacing cameras
+                await CheckAndUpdateFromCameraPresetTemplate(getCamera, manufacturer, getCameraModel, updateCamera);
+            }
+
+            await Cameras.Update(updateCamera);
+
+            Logger.Trace1("Camera {0:CameraManufacturerId} is now connected.", camera);
+        }
+
+        private async Task<string> CheckForReplacementCompatibilityIssue(CameraAddedNotification cameraAddedNotification, UpdateCamera updateCamera, Camera camera)
+        {
+            if (!camera.ReplacedCameraId.HasValue)
+                return string.Empty;
+
+            //audio is not supported on new camera, but it's not disabled => error
+            if (!updateCamera.MicrophoneId.HasValue && camera.AudioRecording != AudioRecording.Disabled)
+            {
+                GetCamera previousCamera = (await Cameras.GetById(new GetCameraByIdFilter
+                                                                  {
+                                                                          EndUserAccountId = camera.EndUserAccountId,
+                                                                          Id = camera.ReplacedCameraId.Value
+                                                                  })).Camera;
+
+                if (previousCamera.AudioRecordingSupport)
+                {
+                    //New camera does not supports audio, but it was enabled on the previous one
+                    return BusinessConstants.ReplaceCameraAudioNotSupportedErrorMessageKey;
+                }
+
+                //Both camera does not support audio, but it has to be disabled to be valid.
+                return BusinessConstants.ReplaceCameraInvalidConfigurationErrorMessageKey;
+            }
+
+            //dual recording is not supported on new camera (no sd present), but it's not disabled => error
+            if (camera.IsDualRecordingEnabled && new[]
+                                                 {
+                                                         CameraStorageState.NoSDCardInCamera, CameraStorageState.NotSupported,
+                                                 }.Contains(updateCamera.StorageState))
+            {
+                return BusinessConstants.ReplaceCameraDualRecordingNotSupportedErrorMessageKey;
+            }
+
+            if (camera.CameraPresetRecordingType == RecordingType.SDContinuous && new[]
+                                                                                  {
+                                                                                          CameraStorageState.NoSDCardInCamera, CameraStorageState.NotSupported,
+                                                                                  }.Contains(updateCamera.StorageState))
+            {
+                return BusinessConstants.ReplaceCameraSdCardNotDetected;
+            }
+
+            GetCameraModelSubscriptionPlansAndPresetsContainer subscriptionPlans = await CameraModels.GetCameraModelSubscriptionPlansAndPresets(updateCamera.CameraModelId, updateCamera.OnBoardStorage, updateCamera.StorageState, updateCamera.SupportNetworkAttachedStorage, updateCamera.NetworkAttachedStorageState, 2);
+            GetSubscriptionPlansForCameraModel subscriptionPlan = subscriptionPlans.SubscriptionPlans.FirstOrDefault(sp => sp.SubscriptionPlanId == camera.SubscriptionPlanId);
+
+            // If the subscription plan is null here, it means there was a mismatch with edge support and bad storage status (no sd inserted, no NAS)
+            if (subscriptionPlan == null || (subscriptionPlan.EdgeRecordingOnly && !cameraAddedNotification.EdgeRecording.Nas.Supported && !cameraAddedNotification.EdgeRecording.SdCard.Supported))
+            {
+                return BusinessConstants.ReplaceCameraEdgeNotSupportedErrorMessageKey;
+            }
+
+            IEnumerable<GetCameraPresetsForCameraModel> cameraPresets = subscriptionPlans.CameraPresets.Where(cp => cp.SubscriptionPlanId == camera.SubscriptionPlanId);
+            bool resolutionMatches = subscriptionPlans.CameraPresetResolutions.Any(cpr => cameraPresets.Any(cp => cp.CameraPresetId == cpr.CameraPresetId) && updateCamera.SupportedResolutions.Any(sr => sr.X == cpr.X && sr.Y == cpr.Y && sr.ImageMode == cpr.ImageMode));
+
+            if (!resolutionMatches)
+            {
+                return BusinessConstants.ReplaceCameraResolutionNotSupportedErrorMessageKey;
+            }
+
+            return string.Empty;
+        }
+
+        private static Manufacturer ConvertManufacturer(CameraManufacturer cameraManufacturer)
+        {
+            switch (cameraManufacturer)
+            {
+                case CameraManufacturer.Axis:
+                    return Manufacturer.Axis;
+                case CameraManufacturer.Dahua:
+                    return Manufacturer.Dahua;
+                case CameraManufacturer.Vivotek:
+                    return Manufacturer.Vivotek;
+                case CameraManufacturer.Bosch:
+                    return Manufacturer.Bosch;
+                case CameraManufacturer.Samsung:    // TODO: USE HanwhaTechwin INSTEAD OF Samsung
+                    return Manufacturer.HanwhaTechwin;
+                case CameraManufacturer.GenetecProtocol: // TODO: USE Euklis INSTEAD GenetecProtocol?
+                    return Manufacturer.Euklis;
+                //case CameraManufacturer.GenetecProtocol:    // TODO: USE Mobotix INSTEAD GenetecProtocol?
+                //    return Manufacturer.Mobotix;
+                //case CameraManufacturer.GenetecProtocol:    // TODO: USE Flir INSTEAD GenetecProtocol?
+                //    return Manufacturer.Flir;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(cameraManufacturer), cameraManufacturer, "Manufacturer not handled");
+            }
+        }
+
+        private static ImageRotation[] ConvertSupportedRotations(Rotation[] supportedRotations)
+        {
+            List<ImageRotation> imageRotations = new List<ImageRotation>();
+
+            foreach (Rotation supportedRotation in supportedRotations)
+            {
+                switch (supportedRotation)
+                {
+                    case Rotation.None:
+                        imageRotations.Add(ImageRotation.None);
+                        break;
+                    case Rotation.Rotation0:
+                        imageRotations.Add(ImageRotation.Rotation0);
+                        break;
+                    case Rotation.Rotation180:
+                        imageRotations.Add(ImageRotation.Rotation180);
+                        break;
+                    case Rotation.Rotation270:
+                        imageRotations.Add(ImageRotation.Rotation270);
+                        break;
+                    case Rotation.Rotation90:
+                        imageRotations.Add(ImageRotation.Rotation90);
+                        break;
+                }
+            }
+
+            return imageRotations.ToArray();
+        }
+
+        private static bool IsCameraInExpectedState(CameraState cameraState)
+        {
+            switch (cameraState)
+            {
+                case CameraState.WaitingForConnection:
+                    return true;
+                case CameraState.Error:
+                case CameraState.Deleted:
+                case CameraState.Deleting:
+                case CameraState.DeletingVideoFiles:
+                    return false;
+                default:
+                    throw new ArgumentOutOfRangeException("cameraState", cameraState, "Unexpected value");
+            }
+        }
+
+        /// <summary>
+        ///     Bug 174260: We want to make the value sent back from SC exclusive, lets add 1! :P
+        /// </summary>
+        /// <param name="updateCamera"></param>
+        /// <param name="cameraAddedNotification"></param>
+        private static void UpdateSupportedRecordingsRetentionDays(UpdateCamera updateCamera, CameraAddedNotification cameraAddedNotification)
+        {
+            if (cameraAddedNotification.EdgeRecording.Nas.CleanUpMaxAgeRange.Maximum > 0)
+            {
+                cameraAddedNotification.EdgeRecording.Nas.CleanUpMaxAgeRange.Minimum++;
+            }
+
+            updateCamera.NetworkAttachedStorageMaxSupportedRecordingsRetentionDays = cameraAddedNotification.EdgeRecording.Nas.CleanUpMaxAgeRange.Maximum;
+            updateCamera.NetworkAttachedStorageMinSupportedRecordingsRetentionDays = cameraAddedNotification.EdgeRecording.Nas.CleanUpMaxAgeRange.Minimum;
+        }
+
+        private static void UpdateSupportedResolutions(UpdateCamera updateCamera, CameraAddedNotification cameraAddedNotification)
+        {
+            updateCamera.SupportedResolutions = new List<Resolution>();
+
+            foreach (Cloud.Messages.Common.Resolution resolution in cameraAddedNotification.Resolutions)
+            {
+                updateCamera.SupportedResolutions.Add(new Resolution
+                                                      {
+                                                              IsCropped = resolution.IsImageCropped,
+                                                              Omni = resolution.OmnicastResolution,
+                                                              X = resolution.X,
+                                                              XPal = resolution.XPal,
+                                                              Y = resolution.Y,
+                                                              YPal = resolution.YPal,
+                                                              // we need to support messages not having the ImageMode property
+                                                              ImageMode = resolution.GetType().GetProperty("ImageMode") != null 
+                                                                      ? (ImageMode)resolution.ImageMode
+                                                                      : ImageMode.Default
+                                                      });
+            }
+        }
+
+        private async Task CheckAndUpdateFromCameraPresetTemplate(GetCameraByEndUserAccountIdAndSerialNumber getCamera, Manufacturer manufacturer, GetCameraModel cameraModel, UpdateCamera updateCamera)
+        {
+            IntegratorCameraPresetConfiguration integratorCameraPresetConfiguration = await IntegratorCameraPresetRepository.GetConfigurations(getCamera.IntegratorAccountId);
+
+            CameraPresetConfiguration cameraPresetConfiguration = integratorCameraPresetConfiguration?.CameraPresetConfigurations.FirstOrDefault(i => string.Equals(manufacturer.ToString(), i.CameraManufacturer, StringComparison.OrdinalIgnoreCase) && string.Equals(cameraModel.Name, i.CameraModelName, StringComparison.OrdinalIgnoreCase));
+
+            if (cameraPresetConfiguration == null)
+            {
+                //No specific configuration for this camera type, good again, freedom, but so close to be constrained.
+                return;
+            }
+
+            GetCameraModelSubscriptionPlansAndPresetsContainer subscriptionPlans = await CameraModels.GetCameraModelSubscriptionPlansAndPresets(updateCamera.CameraModelId, updateCamera.OnBoardStorage, updateCamera.StorageState, updateCamera.SupportNetworkAttachedStorage, updateCamera.NetworkAttachedStorageState, SubscriptionPlanVersion);
+
+            GetCameraPresetResolutionsForCameraModel cameraPresetResolution = null;
+            GetCameraPresetsForCameraModel systemCameraPreset = null;
+
+            Func<CameraPreset, bool> predicate = delegate(CameraPreset i)
+                                                 {
+                                                     GetSubscriptionPlansForCameraModel subscriptionPlan = subscriptionPlans.SubscriptionPlans.FirstOrDefault(j => string.Equals(i.SubscriptionPlanId, j.ExternalId, StringComparison.OrdinalIgnoreCase));
+
+                                                     if (subscriptionPlan == null)
+                                                     {
+                                                         return false;
+                                                     }
+
+                                                     List<GetCameraPresetsForCameraModel> cameraPresets = subscriptionPlans.CameraPresets.Where(j =>
+                                                                                                                                                {
+                                                                                                                                                    if (j.SubscriptionPlanId != subscriptionPlan.SubscriptionPlanId)
+                                                                                                                                                    {
+                                                                                                                                                        return false;
+                                                                                                                                                    }
+
+                                                                                                                                                    if (j.MaxBitrate < i.BitRateKbits)
+                                                                                                                                                    {
+                                                                                                                                                        return false;
+                                                                                                                                                    }
+
+                                                                                                                                                    if (j.MaxFrameRatePerSecond < i.FrameRatePerSecond)
+                                                                                                                                                    {
+                                                                                                                                                        return false;
+                                                                                                                                                    }
+
+                                                                                                                                                    if (j.MaxKeyFrameInterval < i.KeyFrameIntervalInSeconds)
+                                                                                                                                                    {
+                                                                                                                                                        return false;
+                                                                                                                                                    }
+
+                                                                                                                                                    if (j.MaxNumberOfDays < i.RetentionDays)
+                                                                                                                                                    {
+                                                                                                                                                        return false;
+                                                                                                                                                    }
+
+                                                                                                                                                    RecordingType recordingType;
+
+                                                                                                                                                    switch (i.RecordingType)
+                                                                                                                                                    {
+                                                                                                                                                        case DataAccess.WebServices.Entities.Subscriptions.RecordingType.None:
+                                                                                                                                                            recordingType = RecordingType.None;
+                                                                                                                                                            break;
+                                                                                                                                                        case DataAccess.WebServices.Entities.Subscriptions.RecordingType.CloudContinuous:
+                                                                                                                                                            recordingType = RecordingType.CloudContinuous;
+                                                                                                                                                            break;
+                                                                                                                                                        case DataAccess.WebServices.Entities.Subscriptions.RecordingType.CloudOnMotion:
+                                                                                                                                                            recordingType = RecordingType.CloudOnMotion;
+                                                                                                                                                            break;
+                                                                                                                                                        default:
+                                                                                                                                                            throw new ArgumentOutOfRangeException();
+                                                                                                                                                    }
+
+                                                                                                                                                    if (j.RecordingType != recordingType)
+                                                                                                                                                    {
+                                                                                                                                                        return false;
+                                                                                                                                                    }
+
+                                                                                                                                                    return true;
+                                                                                                                                                }).ToList();
+
+                                                     List<GetCameraPresetResolutionsForCameraModel> resolutions = subscriptionPlans.CameraPresetResolutions.Where(j => cameraPresets.Any(k => k.CameraPresetId == j.CameraPresetId)).Where(j => j.X == i.ResolutionX && j.Y == i.ResolutionY && j.ImageMode == i.ResolutionImageMode).ToList();
+
+                                                     if (resolutions.Count == 0)
+                                                     {
+                                                         return false;
+                                                     }
+
+                                                     if (resolutions.Count > 1)
+                                                     {
+                                                         Logger.TraceError("We're enroling a camera({0:CameraId}) for an integrator({0:IntegratorAccountId}) that has automatic camera presets for a camera model({0:CameraModelName}), We found more than 1 matching resolution (weird, shouldn't happen, get a dev to take a look why).", getCamera);
+                                                     }
+
+                                                     cameraPresetResolution = resolutions[0];
+                                                     systemCameraPreset = subscriptionPlans.CameraPresets.First(cp => cp.CameraPresetId == cameraPresetResolution.CameraPresetId);
+
+                                                     return true;
+                                                 };
+
+            CameraPreset cameraPreset = cameraPresetConfiguration.CameraPresets.FirstOrDefault(predicate);
+
+            if (cameraPreset == null)
+            {
+                Logger.TraceError("We're enroling a camera({0:CameraId}) for an integrator({0:IntegratorAccountId}) that has automatic camera presets for a camera model({0:CameraModelName}), but we couldn't find a matching automatic configuration (This needs to be taken care of by using the Get-StratocastPortalIntegratorCameraPresetConfigurations and Set-StratocastPortalIntegratorCameraPresetConfigurations powershell commands).", getCamera);
+                return;
+            }
+
+            updateCamera.Bitrate = cameraPreset.BitRateKbits;
+            updateCamera.FrameRatePerSecond = cameraPreset.FrameRatePerSecond;
+            updateCamera.KeyFrameInterval = cameraPreset.KeyFrameIntervalInSeconds;
+            updateCamera.PictureQualityPercentage = cameraPreset.Quality;
+
+            updateCamera.RecordingPriority = GetRecordingPriorityFromCameraPreset(cameraPreset);
+
+            updateCamera.CameraPresetResolutionId = cameraPresetResolution.CameraPresetResolutionId;
+
+            if (cameraPreset.RetentionDaysUseClientOverrideWhenClientHasValue && getCamera.DefaultRecordingRetentionDays.HasValue)
+            {
+                if (getCamera.DefaultRecordingRetentionDays > systemCameraPreset.MaxNumberOfDays)
+                {
+                    updateCamera.RecordingsRetentionDays = systemCameraPreset.MaxNumberOfDays;
+                }
+                else
+                {
+                    updateCamera.RecordingsRetentionDays = getCamera.DefaultRecordingRetentionDays;
+                }
+            }
+            else
+            {
+                updateCamera.RecordingsRetentionDays = cameraPreset.RetentionDays;
+            }
+
+            updateCamera.ImageRotation = GetImageRotationFromCameraPreset(cameraPreset);
+            if (!updateCamera.SupportedImageRotations.Any(sir => sir == updateCamera.ImageRotation))
+            {
+                updateCamera.ImageRotation = ImageRotation.Rotation0;
+            }
+
+            updateCamera.IsMotionDetectionEnabled = cameraPreset.IsMotionDetectionEnabled;
+            updateCamera.MotionAlertOffThreshold = cameraPreset.MotionAlertOffThreshold;
+            updateCamera.MotionAlertOnThreshold = cameraPreset.MotionAlertOnThreshold;
+            updateCamera.SensitivityThreshold = cameraPreset.SensitivityThreshold;
+
+            updateCamera.State = CameraState.Updating;
+            CompleteCameraCreationCommand command = new CompleteCameraCreationCommand(getCamera.EndUserAccountId,
+                                                                                      getCamera.CameraId,
+                                                                                      updateCamera.CameraPresetResolutionId,
+                                                                                      RecordingType.CloudContinuous,
+                                                                                      null,
+                                                                                      updateCamera.RecordingsRetentionDays,
+                                                                                      updateCamera.Bitrate,
+                                                                                      updateCamera.FrameRatePerSecond,
+                                                                                      updateCamera.KeyFrameInterval,
+                                                                                      updateCamera.PictureQualityPercentage,
+                                                                                      true);
+
+            UserIdContainer userIdContainer = UserIdContainer as UserIdContainer;
+            if (userIdContainer == null)
+            {
+                throw new InvalidOperationException($"Can't auto complete camera creation, user id container must be of type UserIdContainer, current type is: {UserIdContainer.GetType()}");
+            }
+
+            userIdContainer.UserId = getCamera.CreatedByUserId;
+
+            await ServerQueueManager.Send(command);
+        }
+
+        private const int SubscriptionPlanVersion = 2;
+
+        private ImageRotation GetImageRotationFromCameraPreset(CameraPreset cameraPreset)
+        {
+            ImageRotation imageRotation;
+            switch (cameraPreset.ImageRotation)
+            {
+                case DataAccess.WebServices.Entities.Subscriptions.ImageRotation.Rotation180:
+                    imageRotation = ImageRotation.Rotation180;
+                    break;
+                case DataAccess.WebServices.Entities.Subscriptions.ImageRotation.Rotation270:
+                    imageRotation = ImageRotation.Rotation270;
+                    break;
+                case DataAccess.WebServices.Entities.Subscriptions.ImageRotation.Rotation90:
+                    imageRotation = ImageRotation.Rotation90;
+                    break;
+                default:
+                    imageRotation = ImageRotation.Rotation0;
+                    break;
+            }
+
+            return imageRotation;
+        }
+
+        private RecordingPriority GetRecordingPriorityFromCameraPreset(CameraPreset cameraPreset)
+        {
+            RecordingPriority recordingPriority;
+            switch (cameraPreset.RecordingPriority)
+            {
+                case DataAccess.WebServices.Entities.Subscriptions.RecordingPriority.Fps:
+                    recordingPriority = RecordingPriority.FrameRate;
+                    break;
+                case DataAccess.WebServices.Entities.Subscriptions.RecordingPriority.Quality:
+                    recordingPriority = RecordingPriority.PictureQuality;
+                    break;
+                default:
+                    //UserStory 330534 says fps should be the default.
+                    recordingPriority = RecordingPriority.FrameRate;
+                    break;
+            }
+
+            return recordingPriority;
+        }
+
+        #endregion
+    }
+}
