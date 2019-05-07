@@ -8,3 +8,10 @@
 -.emacs.desktop.lock
 -.smex-items
 -*.elc
+-/.vs
+-/.git
+-/.idea
+-bin
+-obj
+-*.sln
+-*.csproj
