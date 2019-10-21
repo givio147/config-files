@@ -1,0 +1,17 @@
+-/semanticdb
+-/url
+-/edts
+-/elpa
+-/.cache
+-ac-comphist.dat
+-.emacs.desktop
+-.emacs.desktop.lock
+-.smex-items
+-*.elc
+-/.vs
+-/.git
+-/.idea
+-bin
+-obj
+-*.sln
+-*.csproj
