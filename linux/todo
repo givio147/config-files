@@ -1,0 +1,13 @@
+### ZSH ###
+
+sudo apt install -y zsh
+# make zsh default
+chsh -s /bin/zsh
+# create symlink
+ln -s ~/sources/config-files/linux/.zshrc ~/.zshrc
+
+### TMUX ###
+
+sudo apt install -y tmux
+# create symlink
+ln -s ~/sources/config-files/tmux/.tmux.conf ~/.tmux.conf

@@ -1,0 +1,53 @@
+### SESSIONS ###
+
+# create named tmux session
+tmux new -s "name"
+
+# list sessions
+
+tmux ls
+
+# detach from session
+<lead> d
+
+# attach to session
+tmux a -t <name>
+
+# switch session from within tmux
+<lead> s
+
+# rename session
+<lead> $
+
+### PANES ###
+
+# split vertical
+<lead> %
+
+# split horizontal
+<lead> "
+
+# move to pane
+<lead> <arrow keys>
+
+# zomm in/out
+<lead> z
+
+# remove pane
+c-d
+
+### WINDOWS ###
+
+# create new window
+<lead> c
+
+# rename window
+<lead> ,
+
+# move to window
+
+<lead> <number>
+# or for next
+<lead> n
+# or for previous
+<lead> p
