@@ -74,5 +74,7 @@ else
   nnoremap <silent> <M-k>    :resize +2<CR>
   nnoremap <silent> <M-h>    :vertical resize -2<CR>
   nnoremap <silent> <M-l>    :vertical resize +2<CR>
+
+  map <C-n> :NERDTreeToggle<CR>
 endif
 
