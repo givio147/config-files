@@ -11,3 +11,10 @@ ln -s ~/sources/config-files/linux/.zshrc ~/.zshrc
 sudo apt install -y tmux
 # create symlink
 ln -s ~/sources/config-files/tmux/.tmux.conf ~/.tmux.conf
+
+### VIM ###
+
+sudo apt install -y nvim
+# create symlink
+ln -s ~/sources/config-files/vim/nvim ~/.config/nvim
+
