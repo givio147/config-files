@@ -7,93 +7,60 @@ if empty(glob('~/.config/nvim/autoload/plug.vim'))
 endif
 
 call plug#begin('~/.config/nvim/autoload/plugged')
-
-  " Convert binary, hex, etc..
-  Plug 'glts/vim-radical'
-  " Files
   Plug 'tpope/vim-eunuch'
-  " Repeat stuff
   Plug 'tpope/vim-repeat'
-  " Surround
   Plug 'tpope/vim-surround'
-  " Better Comments
   Plug 'tpope/vim-commentary'
-  " Plug 'preservim/nerdcommenter'
-  " Have the file system follow you around
   Plug 'preservim/nerdtree'
   Plug 'airblade/vim-rooter'
-  " auto set indent settings
   Plug 'tpope/vim-sleuth'
 
+  " Golang
   Plug 'fatih/vim-go'
 
-  if exists('g:vscode')
-    " Easy motion for VSCode
-    Plug 'asvetliakov/vim-easymotion'
+  " Text Navigation
+  Plug 'psliwka/vim-smoothie'
+  Plug 'justinmk/vim-sneak'
+  Plug 'unblevable/quick-scope'
 
-  else
-    " Text Navigation
-    Plug 'justinmk/vim-sneak'
-    Plug 'unblevable/quick-scope'
-    Plug 'easymotion/vim-easymotion'
-    " Add some color
-    Plug 'norcalli/nvim-colorizer.lua'
-    Plug 'junegunn/rainbow_parentheses.vim'
-    " Better Syntax Support
-    Plug 'sheerun/vim-polyglot'
-    " Cool Icons
-    Plug 'ryanoasis/vim-devicons'
-    " Auto pairs for '(' '[' '{' 
-    Plug 'jiangmiao/auto-pairs'
-    " Closetags
-    Plug 'alvan/vim-closetag'
-    " Themes
-    Plug 'christianchiarulli/onedark.vim'
-    " Plug 'kaicataldo/material.vim'
-    " Plug 'NLKNguyen/papercolor-theme'
-    " Plug 'tomasiser/vim-code-dark'
-    " Intellisense
-    Plug 'neoclide/coc.nvim', {'branch': 'release'}
-    " Status Line
-    Plug 'vim-airline/vim-airline'
-    " Plug 'vim-airline/vim-airline-themes'
-    " Ranger
-    " Plug 'francoiscabrol/ranger.vim'
-    " Plug 'rbgrouleff/bclose.vim'
-    Plug 'kevinhwang91/rnvimr', {'do': 'make sync'}
-    " FZF
-    Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
-    Plug 'junegunn/fzf.vim'
-    " Git
-    Plug 'mhinz/vim-signify'
-    Plug 'airblade/vim-gitgutter'
-    Plug 'tpope/vim-fugitive'
-    Plug 'tpope/vim-rhubarb'
-    Plug 'junegunn/gv.vim'
-    " Terminal
-    Plug 'voldikss/vim-floaterm'
-    " Start Screen
-    Plug 'mhinz/vim-startify'
-    " See what keys do like in emacs
-    Plug 'liuchengxu/vim-which-key'
-    " Zen mode
-    Plug 'junegunn/goyo.vim'
-    " Making stuff
-    Plug 'neomake/neomake'
-    " Snippets
-    Plug 'honza/vim-snippets'
-    Plug 'mattn/emmet-vim'
-    " Better Comments
-    " Plug 'jbgutierrez/vim-better-comments'
-    " Echo doc
-    " Plug 'Shougo/echodoc.vim'
-    " Interactive code
-    Plug 'ChristianChiarulli/codi.vim'
-    " Vim Wiki
-    " Plug 'https://github.com/vimwiki/vimwiki.git'
-  endif
-
-
+  " Add some color
+  Plug 'norcalli/nvim-colorizer.lua'
+  Plug 'junegunn/rainbow_parentheses.vim'
+  Plug 'sheerun/vim-polyglot'
+  Plug 'ryanoasis/vim-devicons'
+  Plug 'jiangmiao/auto-pairs'
+  " Closetags
+  Plug 'alvan/vim-closetag'
+  " Themes
+  Plug 'christianchiarulli/onedark.vim'
+  " Plug 'kaicataldo/material.vim'
+  " Plug 'NLKNguyen/papercolor-theme'
+  " Plug 'tomasiser/vim-code-dark'
+  " Intellisense
+  Plug 'neoclide/coc.nvim', {'branch': 'release'}
+  " Status Line
+  Plug 'vim-airline/vim-airline'
+  Plug 'kevinhwang91/rnvimr', {'do': 'make sync'}
+  Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
+  Plug 'junegunn/fzf.vim'
+  " Git
+  Plug 'mhinz/vim-signify'
+  Plug 'airblade/vim-gitgutter'
+  Plug 'tpope/vim-fugitive'
+  Plug 'tpope/vim-rhubarb'
+  Plug 'junegunn/gv.vim'
+  " Terminal
+  Plug 'voldikss/vim-floaterm'
+  " Start Screen
+  Plug 'mhinz/vim-startify'
+  " See what keys do like in emacs
+  Plug 'liuchengxu/vim-which-key'
+  " Zen mode
+  Plug 'junegunn/goyo.vim'
+  Plug 'neomake/neomake'
+  Plug 'honza/vim-snippets'
+  Plug 'mattn/emmet-vim'
+  Plug 'ChristianChiarulli/codi.vim'
 call plug#end()
 
 " Automatically install missing plugins on startup
