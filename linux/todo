@@ -24,3 +24,7 @@ sudo apt install -y nvim
 # create symlink
 ln -s ~/sources/config-files/vim/nvim ~/.config/nvim
 
+### FIX CHROME ISSUE AFTER SLEEP ###
+
+# add the arguments in the chrome menu launcher:
+--use-gl=desktop

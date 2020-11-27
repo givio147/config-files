@@ -41,3 +41,29 @@ zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,cmd'
 alias ll='ls -l'
 alias la='ls -la'
 alias ..='cd ..'
+
+alias gs='git status'
+alias gadd='git add :/'
+alias gb='git branch -a'
+alias gbdel='function _gbdel(){ git branch -d "$1"; }; _gbdel'
+alias gbDel='function _gbDel(){ git branch -D "$1"; }; _gbDel'
+alias gc='function _gc(){ git commit -m "$1"; }; _gc'
+alias gac='git commit --amend --no-edit'
+alias gp='git pull'
+alias gpr='git pull --rebase'
+
+alias bb='~/.toolbox/bin/brazil-build'
+
+# exports
+
+export PATH=$PATH:/usr/local/go/bin
+export PATH=$PATH:~/sources/config-files/linux/scripts
+
+export _GL_SHADER_DISK_CACHE=1
+export _GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
+export _GL_SHADER_DISK_PATH=~/.owcache
+
+export CUDA_HOME=/usr/local/cuda
+export C_INCLUDE_PATH=${CUDA_HOME}/include
+export CPATH=${CUDA_HOME}/include
+export LIBRARY_PATH=${CUDA_HOME}/lib64

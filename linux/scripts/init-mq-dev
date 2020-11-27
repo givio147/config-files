@@ -1,0 +1,22 @@
+#!/bin/bash
+
+SESSION_GENERAL="general"
+SESSION_ML_UI="ml-ui"
+SESSION_MQ_DESIGNER="mq-designer"
+SESSION_MQ_RUNNER="mq-runner"
+
+SOURCES=~/sources
+GO_SOURCES=~/go/src/github.com/gokadin
+
+tmux new-session -d -s $SESSION_GENERAL
+
+tmux new-session -d -s $SESSION_ML_UI
+tmux send-keys -t $SESSION_ML_UI "cd ~/sources/ml-ui" C-m
+
+tmux new-session -d -s $SESSION_MQ_DESIGNER
+tmux send-keys -t $SESSION_MQ_DESIGNER "cd ~/go/src/github.com/gokadin/mq-designer" C-m
+
+tmux new-session -d -s $SESSION_MQ_RUNNER
+tmux send-keys -t $SESSION_MQ_RUNNER "cd ~/go/src/github.com/gokadin/mq-runner" C-m
+
+tmux attach -t $SESSION_ML_UI
